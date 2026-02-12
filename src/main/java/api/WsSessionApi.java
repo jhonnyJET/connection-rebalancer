@@ -27,8 +27,20 @@ public class WsSessionApi {
 
     ObjectMapper objectMapper;
 
-    @ConfigProperty(name = "ws.session.max.sessions", defaultValue = "10")
+    @ConfigProperty(name = "connection.limit.per.host")
     Integer MAX_SESSIONS_PER_SERVER;
+
+    @ConfigProperty(name = "overutilized.tolerance.percent")
+    Integer OVERUTILIZED_TOLERANCE_PERCENT;
+
+    @ConfigProperty(name = "underutilized.tolerance.percent")
+    Integer UNDERUTILIZED_TOLERANCE_PERCENT;
+
+    @ConfigProperty(name = "max.utilization.percent")
+    Integer MAX_UTILIZATION_PERCENT;
+
+    @ConfigProperty(name = "min.utilization.percent")
+    Integer MIN_UTILIZATION_PERCENT;
 
     @Inject
     AutoScaler autoScaler;
@@ -37,11 +49,6 @@ public class WsSessionApi {
         this.objectMapper = objectMapper;
         this.wsSessionService = wsSessionService;
     }
-
-    private final Integer OVERUTILIZED_TOLERANCE_PERCENT = 10;
-    private final Integer UNDERUTILIZED_TOLERANCE_PERCENT = 10;
-    private final Integer MAX_UTILIZATION_PERCENT = 70;
-    private final Integer MIN_UTILIZATION_PERCENT = 40;
 
     public List<PersistentSession> findAllSessions() throws JsonProcessingException {
         var wsSessions = wsSessionService.findAllSessions();
@@ -255,17 +262,5 @@ public class WsSessionApi {
         } 
         System.out.println("Scaling out WebSocket session servers...");
         autoScaler.scaleOut(serversToScaleOut);
-        // Send command to docker or k8s orchestrator to provision new server and add to load balancer
     }
-
-    // public void analyzeRebalanceNeed() {
-    //     var sessionsToDrop = wsSessionService.retrieveSessionsToDrop();
-    //     if(!sessionsToDrop.isEmpty()) {
-    //         rebalanceSessions(sessionsToDrop);
-    //     }
-    // }
-
-    // public void rebalanceSessions(Map<String, PersistentSession> sessionsToDrop) {
-    //     wsSessionService.dropServerSessions(sessionsToDrop);
-    // }
 }
