@@ -150,12 +150,6 @@ public class WsSessionApi {
         var wsSessions = wsSessionService.findAllSessions();
         var wsSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
         var consulActiveServices = wsSessionService.getConsulActiveServices("ws-app");
-        // try {
-        //     Logger.getAnonymousLogger().log(Level.INFO, "Found Sessions" + objectMapper.writeValueAsString(wsSessions));
-        //     Logger.getAnonymousLogger().log(Level.INFO, "Utilization" + objectMapper.writeValueAsString(wsSessionUtilizationMap));
-        // } catch (Exception e){
-        //     Logger.getAnonymousLogger().log(Level.INFO, e.getMessage());
-        // }
         if (wsSessions.isEmpty()) {
             logger.info("No Sessions to rebalance");
             return;

@@ -52,9 +52,7 @@ public class RedisWsSessionRepository implements WsSessionRepository {
             for (String key : keys) {
                 var value = valueCommands.get(key);
                 result.put(key, value);
-                Logger.getAnonymousLogger().log(Level.WARNING, "Found session key: " + key + " with value: " + objectMapper.writeValueAsString(value));
             }
-            Logger.getAnonymousLogger().log(Level.WARNING, "All sessions: " + result.toString());
         } catch (Exception e) {
             Logger.getAnonymousLogger().log(Level.SEVERE, "Error processing JSON: " + e.getMessage(), e);
         }
