@@ -12,5 +12,5 @@ done
 echo "Version: $version";
 echo "Arch: $arch";
 
-mvn package -Dquarkus.container-image.build=true -Dquarkus.package.type=jar -Dquarkus.container-image.tag=${version}-${arch}
-podman push jonathas.santos/connection_rebalancer_app:${version}-${arch} docker.io/jhonnyvennom/connection_rebalancer:${version}-${arch}
+mvn package -Dquarkus.container-image.build=true -Dquarkus.package.type=jar -Dquarkus.container-image.name=connection_rebalancer -Dquarkus.container-image.tag=${version}-${arch}
+podman push connection_rebalancer:${version}-${arch} docker.io/jhonnyvennom/connection_rebalancer:${version}-${arch}
