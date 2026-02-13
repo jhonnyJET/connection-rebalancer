@@ -75,7 +75,6 @@ public class WsSessionService {
     private List<ConsulService> getServiceInstances(String serviceName) {
         
         var services = consulClient.getServiceInstances(serviceName);
-        // Logger.getLogger(WsSessionService.class.getName()).info("Consul services for " + serviceName + ": " + services.toString());
         return services;
     }
 

@@ -222,7 +222,7 @@ public class AutoScaler {
 
             // Use the Socket Proxy we set up earlier!
             // Endpoint: POST /containers/{id}/stop
-            String socketProxyStopUrl = "http://localhost:2375/containers/" + containerId + "/stop";
+            String socketProxyStopUrl = dockerSocketProxyUri + "/containers/" + containerId + "/stop";
 
             HttpClient client = HttpClient.newHttpClient();
             HttpRequest request = HttpRequest.newBuilder()
@@ -234,11 +234,47 @@ public class AutoScaler {
 
             if (response.statusCode() == 204 || response.statusCode() == 200) {
                 System.out.println("✅ Container " + containerId + " stopped successfully.");
+                
+                // Prune stopped containers after successful stop
+                pruneStoppedContainers();
             } else {
                 System.err.println("❌ Failed to stop container: " + response.body());
             }
 
         } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public void pruneStoppedContainers() {
+        try {
+            System.out.println("🧹 Pruning stopped containers...");
+
+            String socketProxyPruneUrl = dockerSocketProxyUri + "/containers/prune";
+
+            HttpClient client = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(socketProxyPruneUrl))
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() == 200) {
+                var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                var pruneResponse = objectMapper.readTree(response.body());
+                
+                var containersDeleted = pruneResponse.get("ContainersDeleted");
+                var spaceReclaimed = pruneResponse.get("SpaceReclaimed").asLong();
+                
+                int deletedCount = containersDeleted != null ? containersDeleted.size() : 0;
+                System.out.println("✅ Pruned " + deletedCount + " stopped containers. Space reclaimed: " + spaceReclaimed + " bytes");
+            } else {
+                System.err.println("❌ Failed to prune containers: " + response.body());
+            }
+
+        } catch (Exception e) {
+            System.err.println("❌ Error while pruning containers: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -250,7 +286,6 @@ public class AutoScaler {
         var activeOnlyConsulServices = consulServices.stream()
                 .filter(s -> s.Checks.stream().allMatch(c -> c.Status.equals("passing")))
                 .toList();
-        System.out.println("Consul Services: " + consulServices.toString());
         var activeServiceWithLeastUtilization = activeOnlyConsulServices.stream()
                 .sorted((s1, s2) -> {
                     var utilization1 = serverUtilization.getOrDefault(s1.Service.Address, Integer.MAX_VALUE);

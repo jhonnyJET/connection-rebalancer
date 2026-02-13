@@ -23,6 +23,9 @@ import infrastructure.resources.rest.dto.ConsulService;
 
 @ApplicationScoped
 public class WsSessionApi {
+
+    private static Logger logger = Logger.getLogger(WsSessionApi.class.getName());
+    
     WsSessionService wsSessionService;
 
     ObjectMapper objectMapper;
@@ -65,14 +68,8 @@ public class WsSessionApi {
         var sessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
         var consulActiveServices = wsSessionService.getConsulActiveServices("ws-app");
         var consulInactiveServices = wsSessionService.getConsulInactiveServices("ws-app");
-        try {
-            Logger.getAnonymousLogger().log(Level.INFO, "Found Sessions" + objectMapper.writeValueAsString(wsSessions));
-            Logger.getAnonymousLogger().log(Level.INFO, "Utilization" + objectMapper.writeValueAsString(sessionUtilizationMap));
-        } catch (Exception e){
-            Logger.getAnonymousLogger().log(Level.INFO, e.getMessage());
-        }
-        if (wsSessions.isEmpty()) {
-            Logger.getAnonymousLogger().log(Level.INFO, "No Sessions to analyze");
+        if (wsSessions.isEmpty() && consulActiveServices.size() <= 1) {
+            logger.log(Level.INFO, "No Sessions to analyze");
             return;
         }        
 
@@ -84,17 +81,15 @@ public class WsSessionApi {
 
         Map<String, Integer> utilizationMapPercentMap = sessionUtilizationMap.entrySet().stream()
                .map(p -> {
-                Logger.getAnonymousLogger().log(Level.INFO, "Calculating utilization for server " + p.getKey() + ": " + p.getValue().activeSessions() + "/" + p.getValue().maxSessions());
-                Logger.getAnonymousLogger().log(Level.INFO, "Utilization percent: " + ((float) p.getValue().activeSessions() / p.getValue().maxSessions()) * 100);
                 return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
                })
                .flatMap(m -> m.entrySet().stream())
                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-        Logger.getAnonymousLogger().log(Level.INFO, "Utilization Percent Map: " + utilizationMapPercentMap.toString() + " overallActiveSessions: " + overrallActiveSessions + " overrallMaxSessions: " + overrallMaxSessions);
+        
 
         if (overrallMaxSessions == 0) {
-            Logger.getAnonymousLogger().log(Level.INFO, "No Max Sessions configured, cannot analyze balance");
+            logger.log(Level.INFO, "No Max Sessions configured, cannot analyze balance");
             return;
         }
 
@@ -102,28 +97,38 @@ public class WsSessionApi {
         var numberOfServersToScaleOut = 0;
         var numberOfServersToScaleIn = 0;
 
-        Logger.getAnonymousLogger().log(Level.INFO, "Overall Utilization Percent Scale: " + overallUtilizationPercent + "%");
         if (overallUtilizationPercent > MAX_UTILIZATION_PERCENT) {            
             var maxTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
-            System.out.println("Warning: Overall WebSocket session utilization is above 70%: " + overallUtilizationPercent + "%");
             numberOfServersToScaleOut = (int)maxTargetServerTreshold - consulActiveServices.size();
-            var targetServerCount = consulActiveServices.size() + (int)numberOfServersToScaleOut;
-            Logger.getAnonymousLogger().log(Level.INFO, "Number of servers to scale out: " + numberOfServersToScaleOut);
+            var targetServerCount = consulActiveServices.size() + (int)numberOfServersToScaleOut;            
             scaleOutSessionServers(targetServerCount, numberOfServersToScaleOut, consulInactiveServices);
         }
 
         if (overallUtilizationPercent < MIN_UTILIZATION_PERCENT) {
-            if(sessionUtilizationMap.size() <= 0){
+            if(sessionUtilizationMap.size() <= 0 && consulActiveServices.size() <= 1){
                 return;
             }
-            var averageTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
-            Logger.getAnonymousLogger().log(Level.INFO, "Average Target Server Treshold: " + averageTargetServerTreshold);
-            numberOfServersToScaleIn = (int)consulActiveServices.size() - (int)averageTargetServerTreshold;
-            Logger.getAnonymousLogger().log(Level.INFO, "Number of servers to scale in: " + numberOfServersToScaleIn);
+
+            if(sessionUtilizationMap.size() <= 0 && consulActiveServices.size() > 1) {
+                numberOfServersToScaleIn = consulActiveServices.size() - 1;
+            } else {
+                var averageTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));                
+                numberOfServersToScaleIn = (int)consulActiveServices.size() - (int)averageTargetServerTreshold;                
+            }
+
             if(numberOfServersToScaleIn > 0) {
                 scaleInSessionServers((int)numberOfServersToScaleIn, utilizationMapPercentMap);
             }
         }
+
+        
+        logger.info("Summary: " + 
+                    "Overall Active Sessions: " + overrallActiveSessions + 
+                    ", Overall Max Sessions: " + overrallMaxSessions + 
+                    ", Overall Utilization Percent: " + overallUtilizationPercent + 
+                    "%, Number of servers to scale out: " + numberOfServersToScaleOut + 
+                    ", Number of servers to scale in: " + numberOfServersToScaleIn);     
+        logger.info("Utilization Percent Map: " + utilizationMapPercentMap.toString());
 
         if(numberOfServersToScaleIn == 0 && numberOfServersToScaleOut == 0) {
             killServersWithNoSessions(utilizationMapPercentMap, consulActiveServices);
@@ -136,7 +141,6 @@ public class WsSessionApi {
         consulInactiveServices.forEach(service -> {
             var isThereAnySessionConnectedToInactiveService = utilizationMapPercentMap.containsKey(service.Service.Address) && utilizationMapPercentMap.get(service.Service.Address) > 0;
             if (!isThereAnySessionConnectedToInactiveService) {
-                System.out.println("Info: Terminating inactive service " + service.Service.ID + " at " + service.Service.Address + " with no active sessions.");
                 autoScaler.stopSpecificContainer(service.Service.Address);
             }
         });
@@ -146,14 +150,14 @@ public class WsSessionApi {
         var wsSessions = wsSessionService.findAllSessions();
         var wsSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
         var consulActiveServices = wsSessionService.getConsulActiveServices("ws-app");
-        try {
-            Logger.getAnonymousLogger().log(Level.INFO, "Found Sessions" + objectMapper.writeValueAsString(wsSessions));
-            Logger.getAnonymousLogger().log(Level.INFO, "Utilization" + objectMapper.writeValueAsString(wsSessionUtilizationMap));
-        } catch (Exception e){
-            Logger.getAnonymousLogger().log(Level.INFO, e.getMessage());
-        }
+        // try {
+        //     Logger.getAnonymousLogger().log(Level.INFO, "Found Sessions" + objectMapper.writeValueAsString(wsSessions));
+        //     Logger.getAnonymousLogger().log(Level.INFO, "Utilization" + objectMapper.writeValueAsString(wsSessionUtilizationMap));
+        // } catch (Exception e){
+        //     Logger.getAnonymousLogger().log(Level.INFO, e.getMessage());
+        // }
         if (wsSessions.isEmpty()) {
-            Logger.getAnonymousLogger().log(Level.INFO, "No Sessions to rebalance");
+            logger.info("No Sessions to rebalance");
             return;
         }
        var overrallActiveSessions = wsSessionUtilizationMap.values().stream()
@@ -163,23 +167,16 @@ public class WsSessionApi {
        var overrallMaxSessions = consulActiveServices.size() * MAX_SESSIONS_PER_SERVER;
 
         if (overrallMaxSessions == 0) {
-            Logger.getAnonymousLogger().log(Level.INFO, "No Max Sessions configured, cannot analyze balance");
+            logger.info("No Max Sessions configured, cannot analyze balance");
             return;
         }
 
-       Logger.getAnonymousLogger().log(Level.INFO, "Overall Active Sessions: " + overrallActiveSessions);
-       Logger.getAnonymousLogger().log(Level.INFO, "Overall Max Sessions: " + overrallMaxSessions);
        var overrallUtilizationPercent = (int)((float)overrallActiveSessions / overrallMaxSessions * 100);
-       Logger.getAnonymousLogger().log(Level.INFO, "Overall Utilization Percent: " + overrallUtilizationPercent + "%");
-      // Placeholder for balance analysis logic
-       System.out.println("Analyzing WebSocket session server balance...");
 
        Map<String, Integer> underUtilizedServers = new HashMap<>();
        Map<String, Integer> overUtilizedServers = new HashMap<>();
        Map<String, Integer> utilizationMapPercentMap = wsSessionUtilizationMap.entrySet().stream()
-               .map(p -> {
-                Logger.getAnonymousLogger().log(Level.INFO, "Calculating utilization for server " + p.getKey() + ": " + p.getValue().activeSessions() + "/" + p.getValue().maxSessions());
-                Logger.getAnonymousLogger().log(Level.INFO, "Utilization percent: " + ((float) p.getValue().activeSessions() / p.getValue().maxSessions()) * 100);
+               .map(p -> {               
                 return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
                })
                .flatMap(m -> m.entrySet().stream())
@@ -189,11 +186,9 @@ public class WsSessionApi {
             .filter(service -> !utilizationMapPercentMap.containsKey(service.Service.Address) || utilizationMapPercentMap.get(service.Service.Address) == 0)
             .toList();
 
-        activeConsulServicesWithNoSessions.forEach(service -> utilizationMapPercentMap.put(service.Service.Address, 0));
-        Logger.getAnonymousLogger().log(Level.INFO, "Utilization Percent Map: " + utilizationMapPercentMap.toString());
+        activeConsulServicesWithNoSessions.forEach(service -> utilizationMapPercentMap.put(service.Service.Address, 0));        
 
        utilizationMapPercentMap.keySet().forEach(server -> {
-        Logger.getAnonymousLogger().log(Level.INFO, "Evaluating server " + server + " with utilization " + utilizationMapPercentMap.get(server) + "% against overall utilization " + overrallUtilizationPercent + "%");
            if(utilizationMapPercentMap.get(server) > (overrallUtilizationPercent + OVERUTILIZED_TOLERANCE_PERCENT))
                overUtilizedServers.put(server, utilizationMapPercentMap.get(server));
            else if(utilizationMapPercentMap.get(server) < overrallUtilizationPercent)
@@ -208,29 +203,27 @@ public class WsSessionApi {
                .sorted(Comparator.comparingInt(Map.Entry::getValue))
                .toList();
 
-      Logger.getAnonymousLogger().log(Level.INFO, "Overutilized Servers: " + sortedOverUtilizedServers.toString());
-      Logger.getAnonymousLogger().log(Level.INFO, "Underutilized Servers: " + sortedUnderUtilizedServers.toString());
+      logger.info("Rebalancing Summary:  Overutilized Servers: " + overUtilizedServers.toString() + 
+                  ", Underutilized Servers: " + underUtilizedServers.toString() + 
+                  ", Overall Utilization Percent: " + overrallUtilizationPercent + "%, " +
+                  "Overall Active Sessions: " + overrallActiveSessions);
+      logger.info("Utilization Percent Map: " + utilizationMapPercentMap.toString());
 
        sortedOverUtilizedServers.forEach(s -> {
           double maxSessions = wsSessionUtilizationMap.get(s.getKey()).maxSessions();
           double activeSessions = wsSessionUtilizationMap.get(s.getKey()).activeSessions();
           double activeSessionAverageTreshold = Math.ceil((maxSessions * ((double)overrallUtilizationPercent/100)));
-          Logger.getAnonymousLogger().log(Level.INFO, "Server " + s.getKey() + " OverallUtilization:" + overrallUtilizationPercent + "% has max sessions: " + maxSessions + " and active session average treshold: " + activeSessionAverageTreshold);
-          int numberOfsessionsToOffload= (int)(activeSessions - activeSessionAverageTreshold);
-          Logger.getAnonymousLogger().log(Level.INFO, "Offloading " + numberOfsessionsToOffload + " sessions from server " + s.getKey());
+          int numberOfsessionsToOffload= (int)(activeSessions - activeSessionAverageTreshold);        
           offLoadSessions(s.getKey(), numberOfsessionsToOffload);
        });
     }
 
     private void offLoadSessions(String fromServerId, int numberOfSessions) {
+        logger.info("Offloading " + numberOfSessions + " sessions from server " + fromServerId);
         wsSessionService.dropServerSessions(fromServerId, numberOfSessions);
-        // Placeholder for offloading sessions logic
-        //        System.out.println("Offloading " + numberOfSessions + " sessions from server " + fromServerId + " to server " + fromServerId)
-        // Send redis admin command to drop sessions on fromServerId
     }
 
     public void scaleInSessionServers(int numberOfServers, Map<String, Integer> serverUtilization) {
-        // Placeholder for scaling in logic
         System.out.println("Scaling in WebSocket session servers...");
         autoScaler.scaleIn(numberOfServers, serverUtilization);
         // Send command to docker or k8s orchestrator to cordon/remove server from load balancer
@@ -240,14 +233,7 @@ public class WsSessionApi {
     public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices) {
         // Placeholder for scaling out logic
         var inactiveServicesCount = consulInactiveServices.size();
-        try {
-            Logger.getAnonymousLogger().log(Level.INFO, "Consul Inactive Services: " + objectMapper.writeValueAsString(consulInactiveServices));
-        } catch (Exception e) {
-            Logger.getAnonymousLogger().log(Level.INFO, e.getMessage());
-        }
-        Logger.getAnonymousLogger().log(Level.INFO, "Inactive services count: " + inactiveServicesCount + ", Target server count: " + targetServerCount + " Number of servers to scale out: " + numberOfServersToScaleOut);
         if (inactiveServicesCount >= numberOfServersToScaleOut) {
-            System.out.println("There are enough inactive services to handle the scale out request. Activating inactive services...");
             consulInactiveServices.stream()
                 .limit(numberOfServersToScaleOut)
                 .forEach(service -> {
