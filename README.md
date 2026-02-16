@@ -1,6 +1,4 @@
-# connection_rebalancer_app
-
-This project uses Quarkus, the Supersonic Subatomic Java Framework.
+# Connection Rebalancer App
 
 The purpose of this project is to read the state of connections from consul services and redis to scale servers/containers according to the connection count.
 Furthermore, send Redis Pub/sub admin commands for specific servers to shed connections with the purpose of rebalancing the network connection topology.
@@ -11,22 +9,22 @@ Bellow is a visual representation of the rebalancing logic & Scaling logic.
 
 ```mermaid
 flowchart TD
-    Start((Start)) --> A[Read available services\nfrom consul server]
-    A --> B[Read connection topology\nfrom redis server]
+    Start((Start)) --> A[Read available servicesfrom consul server]
+    A --> B[Read connection topology from redis server]
     B --> C[Iterate all available servers]
-    C --> D{Is server utilization\n> overall util +\ntolerance 10%?}
-    D -- Y --> E[Add Server to\nOverutilized list]
-    E --> F[Sort Overutilized\nServers]
+    C --> D{Is server utilization> overall util +tolerance 10%?}
+    D -- Y --> E[Add Server toOverutilized list]
+    E --> F[Sort OverutilizedServers]
     F --> Merge((Merge))
-    D -- N --> G{Is server\nutilization\n< overall\nutilization?}
-    G -- Y --> H[Add Server to\nUnderutilized list]
-    H --> I[Sort Underutilized\nservers]
+    D -- N --> G{Is serverutilization< overallutilization?}
+    G -- Y --> H[Add Server toUnderutilized list]
+    H --> I[Sort Underutilizedservers]
     I --> Merge
     G -- N --> Merge
-    Merge --> J[Calculate Number of sessions\nto drop from overutilized\nservers.]
-    J --> K[Send PUB command to redis\nbackplane to drop Sessions]
-    K --> L[Servers Consume SUB redis\ncommands and elect the\n'Victims' to drop sessions.]
-    L --> M{Are there\nservers to\niterate?}
+    Merge --> J[Calculate Number of sessionsto drop from overutilizedservers.]
+    J --> K[Send PUB command to redisbackplane to drop Sessions]
+    K --> L[Servers Consume SUB rediscommands and elect the'Victims' to drop sessions.]
+    L --> M{Are thereservers toiterate?}
     M -- Y --> D
     M -- N --> End((End))
 
@@ -44,24 +42,24 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start((Start)) --> A[Read available services\nfrom consul server]
-    A --> B[Read connection topology\nfrom redis server]
-    B --> C{Is Overall\nutilization\n> 70%?}
-    C -- Y --> D[Calculate Number\nof Servers needed]
-    D --> E{Is there\nInactive\nservers?}
-    E -- Y --> F[Reactivate\nInactive servers]
-    F --> H{N of servers\nreach the\nserver target?}
-    E -- N --> G[Command to Scale out\nservers - Docker]
+    Start((Start)) --> A[Read available servicesfrom consul server]
+    A --> B[Read connection topologyfrom redis server]
+    B --> C{Is Overallutilization> 70%?}
+    C -- Y --> D[Calculate Numberof Servers needed]
+    D --> E{Is thereInactiveservers?}
+    E -- Y --> F[ReactivateInactive servers]
+    F --> H{N of serversreach theserver target?}
+    E -- N --> G[Command to Scale outservers - Docker]
     G --> H
     H -- N --> E
     H -- Y --> Merge((Merge))
-    C -- N --> I{Is Overall\nutilization\n< 40%?}
-    I -- Y --> J[Calculate Number\nof Servers needed]
-    J --> K[Command to Scale in servers\nInactivate/Cord on server\nin Consul]
+    C -- N --> I{Is Overallutilization< 40%?}
+    I -- Y --> J[Calculate Numberof Servers needed]
+    J --> K[Command to Scale in serversInactivate/Cord on serverin Consul]
     K --> Merge
     I -- N --> Merge
-    Merge --> L{Is there Inactive\nServers with no\nremaining connections?}
-    L -- Y --> M[Kill Inactive servers\nStop docker containers]
+    Merge --> L{Is there InactiveServers with noremaining connections?}
+    L -- Y --> M[Kill Inactive serversStop docker containers]
     M --> End((End))
     L -- N --> End
 
