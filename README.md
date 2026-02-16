@@ -9,22 +9,22 @@ Bellow is a visual representation of the rebalancing logic & Scaling logic.
 
 ```mermaid
 flowchart TD
-    Start((Start)) --> A[Read available servicesfrom consul server]
+    Start((Start)) --> A[Read available services from consul server]
     A --> B[Read connection topology from redis server]
     B --> C[Iterate all available servers]
-    C --> D{Is server utilization> overall util +tolerance 10%?}
+    C --> D{Is server utilization > overall util + tolerance 10%?}
     D -- Y --> E[Add Server toOverutilized list]
     E --> F[Sort OverutilizedServers]
     F --> Merge((Merge))
-    D -- N --> G{Is serverutilization< overallutilization?}
-    G -- Y --> H[Add Server toUnderutilized list]
-    H --> I[Sort Underutilizedservers]
+    D -- N --> G{Is server utilization < overallutilization?}
+    G -- Y --> H[Add Server to Underutilized list]
+    H --> I[Sort Underutilized servers]
     I --> Merge
     G -- N --> Merge
-    Merge --> J[Calculate Number of sessionsto drop from overutilizedservers.]
-    J --> K[Send PUB command to redisbackplane to drop Sessions]
-    K --> L[Servers Consume SUB rediscommands and elect the'Victims' to drop sessions.]
-    L --> M{Are thereservers toiterate?}
+    Merge --> J[Calculate Number of sessions to drop from overutilized servers.]
+    J --> K[Send PUB command to redis backplane to drop Sessions]
+    K --> L[Servers Consume SUB redis commands and elect the 'Victims' to drop sessions.]
+    L --> M{Are there servers to iterate?}
     M -- Y --> D
     M -- N --> End((End))
 
@@ -42,24 +42,24 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start((Start)) --> A[Read available servicesfrom consul server]
-    A --> B[Read connection topologyfrom redis server]
-    B --> C{Is Overallutilization> 70%?}
-    C -- Y --> D[Calculate Numberof Servers needed]
-    D --> E{Is thereInactiveservers?}
-    E -- Y --> F[ReactivateInactive servers]
-    F --> H{N of serversreach theserver target?}
-    E -- N --> G[Command to Scale outservers - Docker]
+    Start((Start)) --> A[Read available services from consul server]
+    A --> B[Read connection topology from redis server]
+    B --> C{Is Overall utilization> 70%?}
+    C -- Y --> D[Calculate Number of Servers needed]
+    D --> E{Is there Inactive servers?}
+    E -- Y --> F[Reactivate Inactive servers]
+    F --> H{N of servers reach the server target?}
+    E -- N --> G[Command to Scale out servers - Docker]
     G --> H
     H -- N --> E
     H -- Y --> Merge((Merge))
-    C -- N --> I{Is Overallutilization< 40%?}
-    I -- Y --> J[Calculate Numberof Servers needed]
-    J --> K[Command to Scale in serversInactivate/Cord on serverin Consul]
+    C -- N --> I{Is Overall utilization< 40%?}
+    I -- Y --> J[Calculate Number of Servers needed]
+    J --> K[Command to Scale in services in Consul]
     K --> Merge
     I -- N --> Merge
-    Merge --> L{Is there InactiveServers with noremaining connections?}
-    L -- Y --> M[Kill Inactive serversStop docker containers]
+    Merge --> L{Is there Inactive Servers with no remaining connections?}
+    L -- Y --> M[Kill Inactive servers stop docker containers]
     M --> End((End))
     L -- N --> End
 
