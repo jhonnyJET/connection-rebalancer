@@ -1,7 +1,6 @@
 # Connection Rebalancer App
 
-The purpose of this project is to read the state of connections from consul services and redis to scale servers/containers according to the connection count.
-Furthermore, send Redis Pub/sub admin commands for specific servers to shed connections with the purpose of rebalancing the network connection topology.
+An automated scaling and rebalancing application that monitors Consul and Redis connection counts to scale containers and shed connections via Redis Pub/Sub for optimal network topology.
 
 Bellow is a visual representation of the rebalancing logic & Scaling logic.
 
@@ -12,11 +11,11 @@ flowchart TD
     Start((Start)) --> A[Read available services from consul server]
     A --> B[Read connection topology from redis server]
     B --> C[Iterate all available servers]
-    C --> D{Is server utilization > overall util + tolerance 10%?}
-    D -- Y --> E[Add Server toOverutilized list]
-    E --> F[Sort OverutilizedServers]
+    C --> D{Is server utilization > (overall utilization + 10%)?}
+    D -- Y --> E[Add Server to overutilized list]
+    E --> F[Sort Overutilized Servers]
     F --> Merge((Merge))
-    D -- N --> G{Is server utilization < overallutilization?}
+    D -- N --> G{Is server utilization < overall utilization?}
     G -- Y --> H[Add Server to Underutilized list]
     H --> I[Sort Underutilized servers]
     I --> Merge
@@ -51,7 +50,7 @@ flowchart TD
     F --> H{N of servers reach the server target?}
     E -- N --> G[Command to Scale out servers - Docker]
     G --> H
-    H -- N --> E
+    H -- N --> G
     H -- Y --> Merge((Merge))
     C -- N --> I{Is Overall utilization< 40%?}
     I -- Y --> J[Calculate Number of Servers needed]
