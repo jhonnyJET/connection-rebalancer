@@ -11,7 +11,7 @@ flowchart TD
     Start((Start)) --> A[Read available services from consul server]
     A --> B[Read connection topology from redis server]
     B --> C[Iterate all available servers]
-    C --> D{Is server utilization > (overall utilization + 10%)?}
+    C --> D{Is host utilization > overall utilization + 10%?}
     D -- Y --> E[Add Server to overutilized list]
     E --> F[Sort Overutilized Servers]
     F --> Merge((Merge))
