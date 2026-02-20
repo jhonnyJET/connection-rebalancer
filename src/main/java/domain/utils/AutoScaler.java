@@ -12,7 +12,6 @@ import java.util.Map;
 
 import infrastructure.resources.rest.client.ConsulClient;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.wildfly.common.ref.Log_.logger;
 
 @ApplicationScoped
 public class AutoScaler {
@@ -93,6 +92,27 @@ public class AutoScaler {
             int currentCount = containers.length;
             int toCreate = targetCount - currentCount;
 
+            System.out.println("📊 Current count: " + currentCount + ", Target count: " + targetCount + ", To create: " + toCreate);
+
+            // Find the target network name from the template container
+            String targetNetworkName = null;
+            var templateNetworks = templateConfig.get("NetworkSettings").get("Networks");
+            var networkIterator = templateNetworks.fieldNames();
+            while (networkIterator.hasNext()) {
+                String networkName = networkIterator.next();
+                if (networkName.contains(containerRuntimeNetwork)) {
+                    targetNetworkName = networkName;
+                    break;
+                }
+            }
+
+            if (targetNetworkName == null) {
+                System.err.println("❌ No network containing '" + containerRuntimeNetwork + "' found in template container");
+                return;
+            }
+
+            System.out.println("🔗 Target network: " + targetNetworkName);
+
             for (int i = 0; i < toCreate; i++) {
                 // 3. Create container config
                 var createConfig = objectMapper.createObjectNode();
@@ -108,12 +128,21 @@ public class AutoScaler {
                     createConfig.set("ExposedPorts", templateConfig.get("Config").get("ExposedPorts"));
                 }
 
-                // Host config (volumes, etc.)
+                // Host config (volumes, network mode)
                 var hostConfig = objectMapper.createObjectNode();
                 if (templateConfig.has("HostConfig") && templateConfig.get("HostConfig").has("Binds")) {
                     hostConfig.set("Binds", templateConfig.get("HostConfig").get("Binds"));
                 }
+                // Set NetworkMode to the target network so the container is NOT added to the default network
+                hostConfig.put("NetworkMode", targetNetworkName);
                 createConfig.set("HostConfig", hostConfig);
+
+                // Attach to the target network via NetworkingConfig as well
+                var networkingConfig = objectMapper.createObjectNode();
+                var endpointsConfig = objectMapper.createObjectNode();
+                endpointsConfig.set(targetNetworkName, objectMapper.createObjectNode());
+                networkingConfig.set("EndpointsConfig", endpointsConfig);
+                createConfig.set("NetworkingConfig", networkingConfig);
 
                 // 4. Create the container
                 HttpRequest createRequest = HttpRequest.newBuilder()
@@ -123,33 +152,13 @@ public class AutoScaler {
                                                        .build();
 
                 HttpResponse<String> createResponse = client.send(createRequest, HttpResponse.BodyHandlers.ofString());
+                System.out.println("📦 Create container response: " + createResponse.statusCode() + " - " + createResponse.body());
 
                 if (createResponse.statusCode() == 201) {
                     var newContainer = objectMapper.readTree(createResponse.body());
                     String newContainerId = newContainer.get("Id").asText();
 
-                    // 5. Connect to network (if needed)
-                    var networks = templateConfig.get("NetworkSettings").get("Networks");
-                    networks.fieldNames().forEachRemaining(networkName -> {
-                        System.out.println("🔗 Connecting new container to network: " + networkName);
-                        if(networkName.equals(containerRuntimeNetwork)) {
-                            try {
-                                var connectConfig = objectMapper.createObjectNode();
-                                connectConfig.put("Container", newContainerId);
-    
-                                HttpRequest connectRequest = HttpRequest.newBuilder()
-                                                                        .uri(URI.create(baseUrl + "/networks/" + networkName + "/connect"))
-                                                                        .header("Content-Type", "application/json")
-                                                                        .POST(HttpRequest.BodyPublishers.ofString(connectConfig.toString()))
-                                                                        .build();
-                                client.send(connectRequest, HttpResponse.BodyHandlers.ofString());
-                            } catch (Exception e) {
-                                e.printStackTrace();
-                            }
-                        }
-                    });
-
-                    // 6. Start the container
+                    // 5. Start the container
                     HttpRequest startRequest = HttpRequest.newBuilder()
                                                           .uri(URI.create(baseUrl + "/containers/" + newContainerId + "/start"))
                                                           .POST(HttpRequest.BodyPublishers.noBody())
