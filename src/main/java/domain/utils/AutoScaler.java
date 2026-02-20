@@ -12,12 +12,16 @@ import java.util.Map;
 
 import infrastructure.resources.rest.client.ConsulClient;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.wildfly.common.ref.Log_.logger;
 
 @ApplicationScoped
 public class AutoScaler {
 
     @ConfigProperty(name = "socket-proxy.uri")
     String dockerSocketProxyUri;
+
+    @ConfigProperty(name = "container-runtime.network")
+    String containerRuntimeNetwork;
 
     ConsulClient consulClient;
 
@@ -127,18 +131,21 @@ public class AutoScaler {
                     // 5. Connect to network (if needed)
                     var networks = templateConfig.get("NetworkSettings").get("Networks");
                     networks.fieldNames().forEachRemaining(networkName -> {
-                        try {
-                            var connectConfig = objectMapper.createObjectNode();
-                            connectConfig.put("Container", newContainerId);
-
-                            HttpRequest connectRequest = HttpRequest.newBuilder()
-                                                                    .uri(URI.create(baseUrl + "/networks/" + networkName + "/connect"))
-                                                                    .header("Content-Type", "application/json")
-                                                                    .POST(HttpRequest.BodyPublishers.ofString(connectConfig.toString()))
-                                                                    .build();
-                            client.send(connectRequest, HttpResponse.BodyHandlers.ofString());
-                        } catch (Exception e) {
-                            e.printStackTrace();
+                        System.out.println("🔗 Connecting new container to network: " + networkName);
+                        if(networkName.equals(containerRuntimeNetwork)) {
+                            try {
+                                var connectConfig = objectMapper.createObjectNode();
+                                connectConfig.put("Container", newContainerId);
+    
+                                HttpRequest connectRequest = HttpRequest.newBuilder()
+                                                                        .uri(URI.create(baseUrl + "/networks/" + networkName + "/connect"))
+                                                                        .header("Content-Type", "application/json")
+                                                                        .POST(HttpRequest.BodyPublishers.ofString(connectConfig.toString()))
+                                                                        .build();
+                                client.send(connectRequest, HttpResponse.BodyHandlers.ofString());
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            }
                         }
                     });
 
