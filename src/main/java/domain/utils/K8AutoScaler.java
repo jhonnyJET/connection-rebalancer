@@ -121,8 +121,9 @@ public class K8AutoScaler {
             Log.infof("Successfully patched deployment %s to %d replicas", deploymentName, replicas);
             return true;
         } catch (KubernetesClientException e) {
-            Log.errorf("Error patching deployment %s: %s", deploymentName, e.getMessage());
-            return false;
+            throw e;
+            // Log.errorf("Error patching deployment %s: %s", deploymentName, e.getMessage());
+            // return false;
         }
     }
 

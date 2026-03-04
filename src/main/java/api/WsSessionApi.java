@@ -38,8 +38,12 @@ public class WsSessionApi {
     @ConfigProperty(name = "app.connection-rebalancer.environment.type")
     String CONNECTION_REBALANCER_ENVIRONMENT_TYPE;
 
+    private final String SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE = CONNECTION_REBALANCER_ENVIRONMENT_TYPE.trim().replaceAll("^\"|\"$", "");
+
     @ConfigProperty(name = "app.connection-rebalancer.kubernetes.app-label")
     String KUBERNETES_APP_LABEL;
+
+    private final String SANITIZED_KUBERNETES_APP_LABEL = KUBERNETES_APP_LABEL.trim().replaceAll("^\"|\"$", "");
 
     @ConfigProperty(name = "connection.limit.per.host")
     Integer MAX_SESSIONS_PER_SERVER;
@@ -54,7 +58,7 @@ public class WsSessionApi {
     Integer MAX_UTILIZATION_PERCENT;
 
     @ConfigProperty(name = "min.utilization.percent")
-    Integer MIN_UTILIZATION_PERCENT;
+    Integer MIN_UTILIZATION_PERCENT;    
 
     @Inject
     AutoScaler autoScaler;
@@ -78,14 +82,13 @@ public class WsSessionApi {
     }
 
     public void analyzeSessionServerUtilization() {
-        var sanitizedEnvType = CONNECTION_REBALANCER_ENVIRONMENT_TYPE.trim().replaceAll("^\"|\"$", "");
-        logger.info("Starting session server utilization analysis for environment type: " + sanitizedEnvType + " lenghts compare: " + sanitizedEnvType.length() + " vs " + K8_ENV_TYPE.length() + " and " + CONTAINER_RUNTIME_ENV_TYPE.length());
-        logger.info("is equal: " + sanitizedEnvType.equalsIgnoreCase("k8s"));
-        if(CONTAINER_RUNTIME_ENV_TYPE.equalsIgnoreCase(sanitizedEnvType)){
+        logger.info("Starting session server utilization analysis for environment type: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE + " lenghts compare: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.length() + " vs " + K8_ENV_TYPE.length() + " and " + CONTAINER_RUNTIME_ENV_TYPE.length());
+        logger.info("is equal: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("k8s"));
+        if(CONTAINER_RUNTIME_ENV_TYPE.equalsIgnoreCase(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE)){
             analyzeSessionServerUtilizationForContainerRuntimeEnvs();
         } 
 
-        if(K8_ENV_TYPE.equalsIgnoreCase(sanitizedEnvType)){
+        if(K8_ENV_TYPE.equalsIgnoreCase(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE)){
             analyzeSessionServerUtilizationForKubernetesEnvs();
         }
     }
@@ -104,65 +107,64 @@ public class WsSessionApi {
     
     public void analyzeSessionServerUtilizationForKubernetesEnvs() {
         var wsSessions = wsSessionService.findAllSessions();
-        logger.info("Initiating analysis");
-        var sanitizedKubernetesAppLabel = KUBERNETES_APP_LABEL.trim().replaceAll("^\"|\"$", "");
-        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedKubernetesAppLabel, "active"));
-        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedKubernetesAppLabel, "inactive"));
-        logger.info("List of active pods with name starting with " + sanitizedKubernetesAppLabel + ": " + objectMapper.valueToTree(activePods).toString());
-        logger.info("List of inactive pods with name starting with " + sanitizedKubernetesAppLabel + ": " + objectMapper.valueToTree(inactivePods).toString());
+        logger.info("Initiating analysis");        
+        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "active"));
+        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "inactive"));
+        logger.info("List of active pods with name starting with " + SANITIZED_KUBERNETES_APP_LABEL + ": " + objectMapper.valueToTree(activePods).toString());
+        logger.info("List of inactive pods with name starting with " + SANITIZED_KUBERNETES_APP_LABEL + ": " + objectMapper.valueToTree(inactivePods).toString());
         var cachedSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
 
         logger.info("Cached Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
 
-        // if (wsSessions.isEmpty() && activePods.size() <= 1) {
-        //     logger.log(Level.INFO, "No Sessions to analyze");
-        //     return;
-        // }        
+        if (wsSessions.isEmpty() && activePods.size() <= 1) {
+            logger.log(Level.INFO, "No Sessions to analyze");
+            return;
+        }        
 
-        // var overrallActiveSessions = cachedSessionUtilizationMap.values().stream()
-        //         .mapToInt(WsSessionUtilization::activeSessions)
-        //         .sum();
+        var overrallActiveSessions = cachedSessionUtilizationMap.values().stream()
+                .mapToInt(WsSessionUtilization::activeSessions)
+                .sum();
 
-        // var overrallMaxSessions = activePods.size() * MAX_SESSIONS_PER_SERVER;
+        var overrallMaxSessions = activePods.size() * MAX_SESSIONS_PER_SERVER;
         
-        // if (overrallMaxSessions == 0) {
-        //     logger.log(Level.INFO, "No Max Sessions configured, No pods to analyze balance");
-        //     return;
-        // }
-        // Map<String, Integer> utilizationMapPercentMap = cachedSessionUtilizationMap.entrySet().stream()
-        //        .map(p -> {
-        //         return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
-        //        })
-        //        .flatMap(m -> m.entrySet().stream())
-        //        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));        
+        if (overrallMaxSessions == 0) {
+            logger.log(Level.INFO, "No Max Sessions configured, No pods to analyze balance");
+            return;
+        }
+        Map<String, Integer> utilizationMapPercentMap = cachedSessionUtilizationMap.entrySet().stream()
+               .map(p -> {
+                return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
+               })
+               .flatMap(m -> m.entrySet().stream())
+               .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));        
 
-        // var overallUtilizationPercent = (((float)overrallActiveSessions / overrallMaxSessions) * 100);
-        // var numberOfServersToScaleOut = 0;
-        // var numberOfServersToScaleIn = 0;
+        var overallUtilizationPercent = (((float)overrallActiveSessions / overrallMaxSessions) * 100);
+        var numberOfServersToScaleOut = 0;
+        var numberOfServersToScaleIn = 0;
 
-        // if (overallUtilizationPercent > MAX_UTILIZATION_PERCENT) {            
-        //     var maxTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
-        //     numberOfServersToScaleOut = (int)maxTargetServerTreshold - activePods.size();
-        //     var targetServerCount = activePods.size() + (int)numberOfServersToScaleOut;            
-        //     scaleOutK8Servers(targetServerCount, numberOfServersToScaleOut, inactivePods);
-        // }
+        if (overallUtilizationPercent > MAX_UTILIZATION_PERCENT) {            
+            var maxTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
+            numberOfServersToScaleOut = (int)maxTargetServerTreshold - activePods.size();
+            var targetServerCount = activePods.size() + (int)numberOfServersToScaleOut;            
+            scaleOutK8Servers(targetServerCount, numberOfServersToScaleOut, inactivePods);
+        }
 
-        // if (overallUtilizationPercent < MIN_UTILIZATION_PERCENT) {
-        //     if(cachedSessionUtilizationMap.size() <= 0 && activePods.size() <= 1){
-        //         return;
-        //     }
+        if (overallUtilizationPercent < MIN_UTILIZATION_PERCENT) {
+            if(cachedSessionUtilizationMap.size() <= 0 && activePods.size() <= 1){
+                return;
+            }
 
-        //     if(cachedSessionUtilizationMap.size() <= 0 && activePods.size() > 1) {
-        //         numberOfServersToScaleIn = activePods.size() - 1;
-        //     } else {
-        //         var averageTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));                
-        //         numberOfServersToScaleIn = (int)activePods.size() - (int)averageTargetServerTreshold;                
-        //     }
+            if(cachedSessionUtilizationMap.size() <= 0 && activePods.size() > 1) {
+                numberOfServersToScaleIn = activePods.size() - 1;
+            } else {
+                var averageTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));                
+                numberOfServersToScaleIn = (int)activePods.size() - (int)averageTargetServerTreshold;                
+            }
 
-        //     if(numberOfServersToScaleIn > 0) {
-        //         scaleInK8SessionServers(numberOfServersToScaleIn, utilizationMapPercentMap, inactivePods);
-        //     }
-        // }
+            if(numberOfServersToScaleIn > 0) {
+                scaleInK8SessionServers(numberOfServersToScaleIn, utilizationMapPercentMap, inactivePods);
+            }
+        }
     }
 
     public void analyzeSessionServerUtilizationForContainerRuntimeEnvs() {
@@ -249,11 +251,11 @@ public class WsSessionApi {
     }       
 
     public void analyzeSessionServerBalance() {
-        if(CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("container_runtime")){
+        if(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("container_runtime")){
             analyzeSessionServerBalanceForContainerRuntime();
         }
 
-        if(CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("k8s")){
+        if(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("k8s")){
             analyzeSessionServerBalanceForKubernetesEnvs();
         }
 
@@ -349,7 +351,7 @@ public class WsSessionApi {
             podsToScaleIn.forEach(pod -> {
                 logger.info("Cordoning pod " + pod.getMetadata().getName() + " with IP " + pod.getStatus().getPodIP());
                 // Need to implement a path to update the pod label to a draining status so that it gets cordoned/removed from load balancing rotation                        
-                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(KUBERNETES_APP_LABEL, "inactive"));
+                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "inactive"));
             });
     }
 
@@ -369,7 +371,7 @@ public class WsSessionApi {
                     .forEach(pod -> {
                         logger.info("Activating inactive pod " + pod.getMetadata().getName());
                         // Need to implement a path to update the pod label back to KUBERNETES_APP_LABEL so that it gets considered back into load balancing rotation                        
-                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(KUBERNETES_APP_LABEL, "active"));
+                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "active"));
                     });
             }
 
