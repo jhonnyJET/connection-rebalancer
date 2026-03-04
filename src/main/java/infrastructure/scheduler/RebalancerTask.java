@@ -15,7 +15,6 @@ public class RebalancerTask {
 
     @Scheduled(every = "60s")
     public void analyzeConnectionRebalance(){
-        // Logger.getAnonymousLogger().log(Level.INFO, "Starting session rebalance");
         wsSessionApi.analyzeSessionServerBalance();
     }
 

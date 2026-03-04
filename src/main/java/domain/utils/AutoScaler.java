@@ -1,9 +1,6 @@
 package domain.utils;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
