@@ -250,6 +250,7 @@ public class WsSessionApi {
 
     public void analyzeSessionServerBalance() {
         var sanitizedEnvType = sanitizeEnvVariable(CONNECTION_REBALANCER_ENVIRONMENT_TYPE);
+        logger.info("Starting session server balance analysis for environment type: " + sanitizedEnvType);
         if(sanitizedEnvType.equalsIgnoreCase("container_runtime")){
             analyzeSessionServerBalanceForContainerRuntime();
         }
@@ -261,6 +262,72 @@ public class WsSessionApi {
     }
 
     public void analyzeSessionServerBalanceForKubernetesEnvs() {
+        Logger.getLogger(WsSessionApi.class.getName()).info("Rebalancing started");
+        var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
+        var wsSessions = wsSessionService.findAllSessions();
+        var wsSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
+        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
+        // var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
+        if (wsSessions.isEmpty()) {
+            logger.info("No Sessions to rebalance");
+            return;
+        }
+       var overrallActiveSessions = wsSessionUtilizationMap.values().stream()
+                                                         .mapToInt(WsSessionUtilization::activeSessions)
+                                                         .sum();
+
+       var overrallMaxSessions = activePods.size() * MAX_SESSIONS_PER_SERVER;
+
+        if (overrallMaxSessions == 0) {
+            logger.info("No Max Sessions configured, cannot analyze balance");
+            return;
+        }
+
+       var overrallUtilizationPercent = (int)((float)overrallActiveSessions / overrallMaxSessions * 100);
+
+       Map<String, Integer> underUtilizedServers = new HashMap<>();
+       Map<String, Integer> overUtilizedServers = new HashMap<>();
+       Map<String, Integer> utilizationMapPercentMap = wsSessionUtilizationMap.entrySet().stream()
+               .map(p -> {               
+                return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
+               })
+               .flatMap(m -> m.entrySet().stream())
+               .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+
+        var activePodsWithNoSessions = activePods.stream()
+            .filter(pod -> !utilizationMapPercentMap.containsKey(pod.getMetadata().getName()) || utilizationMapPercentMap.get(pod.getMetadata().getName()) == 0)
+            .toList();
+
+        activePodsWithNoSessions.forEach(pod -> utilizationMapPercentMap.put(pod.getMetadata().getName(), 0));        
+
+       utilizationMapPercentMap.keySet().forEach(server -> {
+           if(utilizationMapPercentMap.get(server) > (overrallUtilizationPercent + OVERUTILIZED_TOLERANCE_PERCENT))
+               overUtilizedServers.put(server, utilizationMapPercentMap.get(server));
+           else if(utilizationMapPercentMap.get(server) < overrallUtilizationPercent)
+               underUtilizedServers.put(server, utilizationMapPercentMap.get(server));
+       });
+
+       var sortedOverUtilizedServers = overUtilizedServers.entrySet().stream()
+               .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
+               .toList();
+
+       var sortedUnderUtilizedServers = underUtilizedServers.entrySet().stream()
+               .sorted(Comparator.comparingInt(Map.Entry::getValue))
+               .toList();
+
+      logger.info("Rebalancing Summary:  Overutilized Servers: " + overUtilizedServers.toString() + 
+                  ", Underutilized Servers: " + underUtilizedServers.toString() + 
+                  ", Overall Utilization Percent: " + overrallUtilizationPercent + "%, " +
+                  "Overall Active Sessions: " + overrallActiveSessions);
+      logger.info("Utilization Percent Map: " + utilizationMapPercentMap.toString());
+
+       sortedOverUtilizedServers.forEach(s -> {
+          double maxSessions = wsSessionUtilizationMap.get(s.getKey()).maxSessions();
+          double activeSessions = wsSessionUtilizationMap.get(s.getKey()).activeSessions();
+          double activeSessionAverageTreshold = Math.ceil((maxSessions * ((double)overrallUtilizationPercent/100)));
+          int numberOfsessionsToOffload= (int)(activeSessions - activeSessionAverageTreshold);        
+          offLoadSessions(s.getKey(), numberOfsessionsToOffload);
+       });        
 
     }
 
@@ -381,7 +448,7 @@ public class WsSessionApi {
                 logger.info("No need to scale out, inactive pods can handle the target server count.");
                 return;
             }
-            k8AutoScaler.patchDeploymentReplicas(KUBERNETES_APP_LABEL, "default", serversToScaleOut);
+            k8AutoScaler.patchDeploymentReplicas(sanitizedK8AppLabel, "default", serversToScaleOut);
     }
 
     public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices) {
