@@ -38,12 +38,8 @@ public class WsSessionApi {
     @ConfigProperty(name = "app.connection-rebalancer.environment.type")
     String CONNECTION_REBALANCER_ENVIRONMENT_TYPE;
 
-    private final String SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE = CONNECTION_REBALANCER_ENVIRONMENT_TYPE.trim().replaceAll("^\"|\"$", "");
-
     @ConfigProperty(name = "app.connection-rebalancer.kubernetes.app-label")
     String KUBERNETES_APP_LABEL;
-
-    private final String SANITIZED_KUBERNETES_APP_LABEL = KUBERNETES_APP_LABEL.trim().replaceAll("^\"|\"$", "");
 
     @ConfigProperty(name = "connection.limit.per.host")
     Integer MAX_SESSIONS_PER_SERVER;
@@ -82,13 +78,14 @@ public class WsSessionApi {
     }
 
     public void analyzeSessionServerUtilization() {
-        logger.info("Starting session server utilization analysis for environment type: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE + " lenghts compare: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.length() + " vs " + K8_ENV_TYPE.length() + " and " + CONTAINER_RUNTIME_ENV_TYPE.length());
-        logger.info("is equal: " + SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("k8s"));
-        if(CONTAINER_RUNTIME_ENV_TYPE.equalsIgnoreCase(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE)){
+        var sanitizedEnvType = sanitizeEnvVariable(CONNECTION_REBALANCER_ENVIRONMENT_TYPE);
+        logger.info("Starting session server utilization analysis for environment type: " + sanitizedEnvType + " lenghts compare: " + sanitizedEnvType.length() + " vs " + K8_ENV_TYPE.length() + " and " + CONTAINER_RUNTIME_ENV_TYPE.length());
+        logger.info("is equal: " + sanitizedEnvType.equalsIgnoreCase("k8s"));
+        if(CONTAINER_RUNTIME_ENV_TYPE.equalsIgnoreCase(sanitizedEnvType)){
             analyzeSessionServerUtilizationForContainerRuntimeEnvs();
         } 
 
-        if(K8_ENV_TYPE.equalsIgnoreCase(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE)){
+        if(K8_ENV_TYPE.equalsIgnoreCase(sanitizedEnvType)){
             analyzeSessionServerUtilizationForKubernetesEnvs();
         }
     }
@@ -106,12 +103,13 @@ public class WsSessionApi {
 
     
     public void analyzeSessionServerUtilizationForKubernetesEnvs() {
+        var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         var wsSessions = wsSessionService.findAllSessions();
         logger.info("Initiating analysis");        
-        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "active"));
-        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "inactive"));
-        logger.info("List of active pods with name starting with " + SANITIZED_KUBERNETES_APP_LABEL + ": " + objectMapper.valueToTree(activePods).toString());
-        logger.info("List of inactive pods with name starting with " + SANITIZED_KUBERNETES_APP_LABEL + ": " + objectMapper.valueToTree(inactivePods).toString());
+        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
+        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
+        logger.info("List of active pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(activePods).toString());
+        logger.info("List of inactive pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(inactivePods).toString());
         var cachedSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
 
         logger.info("Cached Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
@@ -251,11 +249,12 @@ public class WsSessionApi {
     }       
 
     public void analyzeSessionServerBalance() {
-        if(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("container_runtime")){
+        var sanitizedEnvType = sanitizeEnvVariable(CONNECTION_REBALANCER_ENVIRONMENT_TYPE);
+        if(sanitizedEnvType.equalsIgnoreCase("container_runtime")){
             analyzeSessionServerBalanceForContainerRuntime();
         }
 
-        if(SANITIZED_CONNECTION_REBALANCER_ENVIRONMENT_TYPE.equalsIgnoreCase("k8s")){
+        if(sanitizedEnvType.equalsIgnoreCase("k8s")){
             analyzeSessionServerBalanceForKubernetesEnvs();
         }
 
@@ -338,6 +337,7 @@ public class WsSessionApi {
 
 
     public void scaleInK8SessionServers(int numberOfServers, Map<String, Integer> serverUtilization, List<Pod> activePods) {
+        var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         System.out.println("Scaling in WebSocket session servers...");
         // Placeholder for scaling in logic
         var sortedActivePods = activePods.stream()
@@ -351,7 +351,7 @@ public class WsSessionApi {
             podsToScaleIn.forEach(pod -> {
                 logger.info("Cordoning pod " + pod.getMetadata().getName() + " with IP " + pod.getStatus().getPodIP());
                 // Need to implement a path to update the pod label to a draining status so that it gets cordoned/removed from load balancing rotation                        
-                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "inactive"));
+                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
             });
     }
 
@@ -365,13 +365,14 @@ public class WsSessionApi {
 
 
     public void scaleOutK8Servers(int targetServerCount, int numberOfServersToScaleOut, List<Pod> inactivePods) {
+        var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
             if (inactivePods.size() >= numberOfServersToScaleOut) {
                 inactivePods.stream()
                     .limit(numberOfServersToScaleOut)
                     .forEach(pod -> {
                         logger.info("Activating inactive pod " + pod.getMetadata().getName());
                         // Need to implement a path to update the pod label back to KUBERNETES_APP_LABEL so that it gets considered back into load balancing rotation                        
-                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(SANITIZED_KUBERNETES_APP_LABEL, "active"));
+                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
                     });
             }
 
@@ -401,5 +402,9 @@ public class WsSessionApi {
         } 
         System.out.println("Scaling out WebSocket session servers...");
         autoScaler.scaleOut(serversToScaleOut);
+    }
+
+    private String sanitizeEnvVariable(String envVariable) {
+        return envVariable.trim().replaceAll("^\"|\"$", "");
     }
 }
