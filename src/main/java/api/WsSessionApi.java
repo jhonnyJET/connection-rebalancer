@@ -131,9 +131,8 @@ public class WsSessionApi {
 
         if (overallUtilizationPercent > MAX_UTILIZATION_PERCENT) {            
             var maxTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
-            numberOfServersToScaleOut = (int)maxTargetServerTreshold - activePods.size();
-            var targetServerCount = activePods.size() + (int)numberOfServersToScaleOut;            
-            scaleOutK8Servers(targetServerCount, numberOfServersToScaleOut, inactivePods);
+            numberOfServersToScaleOut = (int)maxTargetServerTreshold - activePods.size();           
+            scaleOutK8Servers(numberOfServersToScaleOut, activePods, inactivePods);
         }
 
         if (overallUtilizationPercent < MIN_UTILIZATION_PERCENT) {
@@ -447,24 +446,26 @@ public class WsSessionApi {
 
 
 
-    public void scaleOutK8Servers(int targetServerCount, int numberOfServersToScaleOut, List<Pod> inactivePods) {
+    public void scaleOutK8Servers(int numberOfServersToScaleOut, List<Pod> inactivePods, List<Pod> activePods) {
         var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
-            if (inactivePods.size() >= numberOfServersToScaleOut) {
-                inactivePods.stream()
-                    .limit(numberOfServersToScaleOut)
-                    .forEach(pod -> {
-                        logger.info("Activating inactive pod " + pod.getMetadata().getName());
-                        // Need to implement a path to update the pod label back to KUBERNETES_APP_LABEL so that it gets considered back into load balancing rotation                        
-                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "traffic", "active");
-                    });
-            }
+        var targetServerCount = activePods.size() + numberOfServersToScaleOut;
+        
+        
+        // Reactivate inactive pods first, then scale out with new pods if needed...
+        inactivePods.stream()
+            .limit(numberOfServersToScaleOut)
+            .forEach(pod -> {
+                logger.info("Activating inactive pod " + pod.getMetadata().getName());
+                // Need to implement a path to update the pod label back to KUBERNETES_APP_LABEL so that it gets considered back into load balancing rotation                        
+                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "traffic", "active");
+            });
 
-            var serversToScaleOut = targetServerCount - inactivePods.size();
-            if(serversToScaleOut - inactivePods.size() <= 0){
-                logger.info("No need to scale out, inactive pods can handle the target server count.");
-                return;
-            }
-            k8AutoScaler.patchDeploymentReplicas(sanitizedK8AppLabel, "default", serversToScaleOut);
+        var numberOfServersToScaleOutWithActivatedPods = activePods.size() + inactivePods.size() >= targetServerCount ? 0 : targetServerCount - (activePods.size() + inactivePods.size());
+        if(numberOfServersToScaleOutWithActivatedPods <= 0){
+            logger.info("No need to scale out, inactive pods can handle the target server count.");
+            return;
+        }
+        k8AutoScaler.patchDeploymentReplicas(sanitizedK8AppLabel, "default", targetServerCount);
     }
 
     public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices) {
