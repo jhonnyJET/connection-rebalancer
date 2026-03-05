@@ -191,4 +191,35 @@ public class K8AutoScaler {
             return false;
         }
     }
+
+    public boolean patchPodAnnotation(String podName, String namespace, String annotationKey, String annotationValue) {
+        try {
+            Log.infof("Patching pod %s in namespace %s with annotation %s=%s", 
+                     podName, namespace, annotationKey, annotationValue);
+            
+            Pod pod = kubernetesClient.pods()
+                    .inNamespace(namespace)
+                    .withName(podName)
+                    .get();
+            
+            if (pod == null) {
+                Log.errorf("Pod %s not found in namespace %s", podName, namespace);
+                return false;
+            }
+            
+            // Add or update the annotation
+            pod.getMetadata().getAnnotations().put(annotationKey, annotationValue);
+            
+            kubernetesClient.pods()
+                    .inNamespace(namespace)
+                    .withName(podName)
+                    .patch(pod);
+            
+            Log.infof("Successfully patched pod %s with annotation %s=%s", podName, annotationKey, annotationValue);
+            return true;
+        } catch (KubernetesClientException e) {
+            Log.errorf("Error patching pod %s: %s", podName, e.getMessage());
+            return false;
+        }
+    }
 }

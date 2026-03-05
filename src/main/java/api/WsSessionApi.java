@@ -90,24 +90,13 @@ public class WsSessionApi {
         }
     }
 
-    private String formatK8AppLabel(String podNamePrefix, String status) {
-        if(status.equalsIgnoreCase("active")){
-            return podNamePrefix;
-        }
-
-        if(status.equalsIgnoreCase("inactive")){
-            return podNamePrefix + "-draining";
-        }
-        return podNamePrefix;
-    }
-
     
     public void analyzeSessionServerUtilizationForKubernetesEnvs() {
         var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         var wsSessions = wsSessionService.findAllSessions();
         logger.info("Initiating analysis");        
-        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
-        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
+        var activePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "active");
+        var inactivePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "inactive");
         logger.info("List of active pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(activePods).toString());
         logger.info("List of inactive pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(inactivePods).toString());
         var cachedSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
@@ -162,6 +151,10 @@ public class WsSessionApi {
             if(numberOfServersToScaleIn > 0) {
                 scaleInK8SessionServers(numberOfServersToScaleIn, utilizationMapPercentMap, activePods);
             }
+        }
+
+        if(numberOfServersToScaleIn == 0 && numberOfServersToScaleOut == 0) {
+            killK8ServersWithNoSessions(utilizationMapPercentMap, activePods, inactivePods);
         }
     }
 
@@ -237,6 +230,23 @@ public class WsSessionApi {
         }
     }
 
+    public void killK8ServersWithNoSessions(Map<String, Integer> utilizationMapPercentMap, List<Pod> activePods, List<Pod> inactivePods) {
+        Integer podsMarkedForDeletion = 0;
+        for (Pod pod : inactivePods) {
+           var isThereAnySessionConnectedToInactiveService = utilizationMapPercentMap.containsKey(pod.getStatus().getPodIP()) && utilizationMapPercentMap.get(pod.getStatus().getPodIP()) > 0;
+            if (!isThereAnySessionConnectedToInactiveService) {
+                k8AutoScaler.patchPodAnnotation(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "controller.kubernetes.io/pod-deletion-cost", "-100");
+                podsMarkedForDeletion++;
+            }
+        }
+        if(podsMarkedForDeletion > 0){
+            var targetServerCount = activePods.size() + inactivePods.size() - podsMarkedForDeletion;
+            k8AutoScaler.patchDeploymentReplicas(sanitizeEnvVariable(KUBERNETES_APP_LABEL), "default", targetServerCount);
+        }
+        logger.info("Pods marked for deletion: " + podsMarkedForDeletion);
+    }       
+
+
     public void killServersWithNoSessions(Map<String, Integer> utilizationMapPercentMap, List<ConsulService> consulActiveServices) {
         var consulInactiveServices = wsSessionService.getConsulInactiveServices("ws-app");
         
@@ -266,8 +276,8 @@ public class WsSessionApi {
         var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         var wsSessions = wsSessionService.findAllSessions();
         var wsSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
-        var activePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
-        // var inactivePods = k8AutoScaler.getPodsWithLabel("default", "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
+        var activePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "active");
+        // var inactivePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "inactive");
         if (wsSessions.isEmpty()) {
             logger.info("No Sessions to rebalance");
             return;
