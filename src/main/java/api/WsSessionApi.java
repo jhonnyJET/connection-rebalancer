@@ -160,7 +160,7 @@ public class WsSessionApi {
             }
 
             if(numberOfServersToScaleIn > 0) {
-                scaleInK8SessionServers(numberOfServersToScaleIn, utilizationMapPercentMap, inactivePods);
+                scaleInK8SessionServers(numberOfServersToScaleIn, utilizationMapPercentMap, activePods);
             }
         }
     }
@@ -295,10 +295,10 @@ public class WsSessionApi {
                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         var activePodsWithNoSessions = activePods.stream()
-            .filter(pod -> !utilizationMapPercentMap.containsKey(pod.getMetadata().getName()) || utilizationMapPercentMap.get(pod.getMetadata().getName()) == 0)
+            .filter(pod -> !utilizationMapPercentMap.containsKey(pod.getStatus().getPodIP()) || utilizationMapPercentMap.get(pod.getStatus().getPodIP()) == 0)
             .toList();
 
-        activePodsWithNoSessions.forEach(pod -> utilizationMapPercentMap.put(pod.getMetadata().getName(), 0));        
+        activePodsWithNoSessions.forEach(pod -> utilizationMapPercentMap.put(pod.getStatus().getPodIP(), 0));        
 
        utilizationMapPercentMap.keySet().forEach(server -> {
            if(utilizationMapPercentMap.get(server) > (overrallUtilizationPercent + OVERUTILIZED_TOLERANCE_PERCENT))
@@ -406,19 +406,25 @@ public class WsSessionApi {
     public void scaleInK8SessionServers(int numberOfServers, Map<String, Integer> serverUtilization, List<Pod> activePods) {
         var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         System.out.println("Scaling in WebSocket session servers...");
+        System.out.println("Number of servers to scale in: " + numberOfServers + " active pods: " + activePods.size() + " server utilization map: " + serverUtilization.toString());
+
         // Placeholder for scaling in logic
         var sortedActivePods = activePods.stream()
             .sorted(Comparator.comparingInt(p -> serverUtilization.getOrDefault(p.getStatus().getPodIP(), 0)))
             .toList();
 
+        System.out.println("Sorted active pods by utilization: " + sortedActivePods.stream().map(p -> p.getStatus().getPodIP() + ":" + serverUtilization.getOrDefault(p.getStatus().getPodIP(), 0)).toList().toString());
+
         var podsToScaleIn = sortedActivePods.stream()
             .limit(numberOfServers)
             .toList();
 
+        System.out.println("Pods selected to scale in: " + podsToScaleIn.stream().map(p -> p.getMetadata().getName()).toList().toString());
+
             podsToScaleIn.forEach(pod -> {
                 logger.info("Cordoning pod " + pod.getMetadata().getName() + " with IP " + pod.getStatus().getPodIP());
                 // Need to implement a path to update the pod label to a draining status so that it gets cordoned/removed from load balancing rotation                        
-                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(sanitizedK8AppLabel, "inactive"));
+                k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "traffic", "inactive");
             });
     }
 
@@ -439,7 +445,7 @@ public class WsSessionApi {
                     .forEach(pod -> {
                         logger.info("Activating inactive pod " + pod.getMetadata().getName());
                         // Need to implement a path to update the pod label back to KUBERNETES_APP_LABEL so that it gets considered back into load balancing rotation                        
-                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "app", formatK8AppLabel(sanitizedK8AppLabel, "active"));
+                        k8AutoScaler.patchPodLabel(pod.getMetadata().getName(), pod.getMetadata().getNamespace(), "traffic", "active");
                     });
             }
 
