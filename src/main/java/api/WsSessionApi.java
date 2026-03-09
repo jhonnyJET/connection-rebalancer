@@ -100,11 +100,18 @@ public class WsSessionApi {
         logger.info("List of active pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(activePods).toString());
         logger.info("List of inactive pods with name starting with " + sanitizedK8AppLabel + ": " + objectMapper.valueToTree(inactivePods).toString());
         var cachedSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
+        Map<String, Integer> utilizationMapPercentMap = cachedSessionUtilizationMap.entrySet().stream()
+               .map(p -> {
+                return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
+               })
+               .flatMap(m -> m.entrySet().stream())
+               .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));             
 
         logger.info("Cached Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
 
         if (wsSessions.isEmpty() && activePods.size() <= 1) {
             logger.log(Level.INFO, "No Sessions to analyze");
+            killK8ServersWithNoSessions(utilizationMapPercentMap, activePods, inactivePods);
             return;
         }        
 
@@ -117,13 +124,7 @@ public class WsSessionApi {
         if (overrallMaxSessions == 0) {
             logger.log(Level.INFO, "No Max Sessions configured, No pods to analyze balance");
             return;
-        }
-        Map<String, Integer> utilizationMapPercentMap = cachedSessionUtilizationMap.entrySet().stream()
-               .map(p -> {
-                return Map.of(p.getKey(), (int) (((float)p.getValue().activeSessions() / p.getValue().maxSessions()) * 100));
-               })
-               .flatMap(m -> m.entrySet().stream())
-               .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));        
+        }   
 
         var overallUtilizationPercent = (((float)overrallActiveSessions / overrallMaxSessions) * 100);
         var numberOfServersToScaleOut = 0;
@@ -446,7 +447,7 @@ public class WsSessionApi {
 
 
 
-    public void scaleOutK8Servers(int numberOfServersToScaleOut, List<Pod> inactivePods, List<Pod> activePods) {
+    public void scaleOutK8Servers(int numberOfServersToScaleOut, List<Pod> activePods, List<Pod> inactivePods) {
         var sanitizedK8AppLabel = sanitizeEnvVariable(KUBERNETES_APP_LABEL);
         var targetServerCount = activePods.size() + numberOfServersToScaleOut;
         
