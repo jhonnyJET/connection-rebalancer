@@ -13,7 +13,7 @@ import jakarta.inject.Inject;
 @ApplicationScoped
 public class ScalingApi {
 
-    @ConfigProperty(name = "container.runtime.app.name")
+    @ConfigProperty(name = "app.connection-rebalancer.container-runtime.app-name")
     String containerRuntimeAppName;
 
     @ConfigProperty(name = "app.connection-rebalancer.kubernetes.app-label")

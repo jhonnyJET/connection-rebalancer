@@ -36,8 +36,8 @@ public class GrpcSessionApi {
     @ConfigProperty(name = "connection.limit.per.host")
     Integer maxSessionsPerServer;
 
-    @ConfigProperty(name = "app.connection-rebalancer.container-runtime.app-name")
-    String containerRuntimeAppName;
+    @ConfigProperty(name = "app.connection-rebalancer.container-runtime.grpc-app-name")
+    String containerRuntimeGrpcAppName;
 
     @ConfigProperty(name = "overutilized.tolerance.percent")
     Integer overutilizedTolerancePercent;
@@ -167,10 +167,10 @@ public class GrpcSessionApi {
     public void analyzeSessionServerUtilizationForContainerRuntimeEnvs() {
         var grpcSessions = grpcSessionService.findAllSessions();
         var sessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
-        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
-        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeGrpcAppName));
+        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeGrpcAppName));
 
-        logger.info("List of active consul services for app " + sanitizeEnvVariable(containerRuntimeAppName) + ": "
+        logger.info("List of active consul services for app " + sanitizeEnvVariable(containerRuntimeGrpcAppName) + ": "
                 + objectMapper.valueToTree(consulActiveServices));
         if (grpcSessions.isEmpty()) {
             logger.log(Level.INFO, "No gRPC sessions to analyze");
@@ -237,7 +237,7 @@ public class GrpcSessionApi {
     }
 
     public void killServersWithNoSessions(Map<String, Integer> utilizationMapPercentMap, List<ConsulService> consulActiveServices) {
-        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeGrpcAppName));
         consulInactiveServices.forEach(service -> {
             var isThereAnySessionConnectedToInactiveService = utilizationMapPercentMap.containsKey(service.Service.Address)
                     && utilizationMapPercentMap.get(service.Service.Address) > 0;
@@ -260,12 +260,12 @@ public class GrpcSessionApi {
             return;
         }
         System.out.println("Scaling out gRPC session servers...");
-        autoScaler.scaleOut(targetServerCount, sanitizeEnvVariable(containerRuntimeAppName));
+        autoScaler.scaleOut(targetServerCount, sanitizeEnvVariable(containerRuntimeGrpcAppName));
     }
 
     public void scaleInSessionServers(int numberOfServers, Map<String, Integer> serverUtilization) {
         logger.info("Scaling in gRPC session servers...");
-        autoScaler.scaleIn(numberOfServers, serverUtilization, sanitizeEnvVariable(containerRuntimeAppName));
+        autoScaler.scaleIn(numberOfServers, serverUtilization, sanitizeEnvVariable(containerRuntimeGrpcAppName));
     }
 
     public void analyzeSessionServerBalance() {
@@ -281,7 +281,7 @@ public class GrpcSessionApi {
     public void analyzeSessionServerBalanceForContainerRuntime() {
         var grpcSessions = grpcSessionService.findAllSessions();
         var sessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
-        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeGrpcAppName));
 
         if (grpcSessions.isEmpty()) {
             logger.info("No gRPC sessions to rebalance");
