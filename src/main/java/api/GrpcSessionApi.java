@@ -2,9 +2,9 @@ package api;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import domain.SsePersistentSession;
-import domain.SseSessionService;
-import domain.SseSessionUtilization;
+import domain.GrpcPersistentSession;
+import domain.GrpcSessionService;
+import domain.GrpcSessionUtilization;
 import domain.utils.AutoScaler;
 import domain.utils.K8AutoScaler;
 import infrastructure.resources.rest.dto.ConsulService;
@@ -23,11 +23,11 @@ import java.util.stream.Collectors;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
-public class SseSessionApi {
+public class GrpcSessionApi {
 
-    private static final Logger logger = Logger.getLogger(SseSessionApi.class.getName());
+    private static final Logger logger = Logger.getLogger(GrpcSessionApi.class.getName());
 
-    SseSessionService sseSessionService;
+    GrpcSessionService grpcSessionService;
     ObjectMapper objectMapper;
 
     @ConfigProperty(name = "app.connection-rebalancer.kubernetes.app-label")
@@ -60,25 +60,25 @@ public class SseSessionApi {
     @Inject
     AutoScaler autoScaler;
 
-    public SseSessionApi(ObjectMapper objectMapper, SseSessionService sseSessionService) {
+    public GrpcSessionApi(ObjectMapper objectMapper, GrpcSessionService grpcSessionService) {
         this.objectMapper = objectMapper;
-        this.sseSessionService = sseSessionService;
+        this.grpcSessionService = grpcSessionService;
     }
 
-    public List<SsePersistentSession> findAllSessions() throws JsonProcessingException {
-        var sseSessions = sseSessionService.findAllSessions();
-        objectMapper.writeValueAsString(sseSessions);
-        return sseSessions;
+    public List<GrpcPersistentSession> findAllSessions() throws JsonProcessingException {
+        var grpcSessions = grpcSessionService.findAllSessions();
+        objectMapper.writeValueAsString(grpcSessions);
+        return grpcSessions;
     }
 
     public void sendAdminCommand(Map<String, Integer> sessions) {
-        sseSessionService.sendAdminCommand(sessions);
+        grpcSessionService.sendAdminCommand(sessions);
     }
 
     public void analyzeSessionServerUtilizationForKubernetesEnvs() {
         var sanitizedK8AppLabel = sanitizeEnvVariable(kubernetesAppLabel);
-        var sseSessions = sseSessionService.findAllSessions();
-        logger.info("Initiating SSE utilization analysis");
+        var grpcSessions = grpcSessionService.findAllSessions();
+        logger.info("Initiating gRPC utilization analysis");
         var activePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "active");
         var inactivePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "inactive");
         logger.info("List of active pods with name starting with " + sanitizedK8AppLabel + ": "
@@ -86,22 +86,22 @@ public class SseSessionApi {
         logger.info("List of inactive pods with name starting with " + sanitizedK8AppLabel + ": "
                 + objectMapper.valueToTree(inactivePods));
 
-        var cachedSessionUtilizationMap = sseSessionService.retrieveServerSessionUtilization(sseSessions);
+        var cachedSessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
         Map<String, Integer> utilizationMapPercentMap = cachedSessionUtilizationMap.entrySet().stream()
                 .map(p -> Map.of(p.getKey(), (int) (((float) p.getValue().activeSessions() / p.getValue().maxSessions()) * 100)))
                 .flatMap(m -> m.entrySet().stream())
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
-        logger.info("Cached SSE Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
+        logger.info("Cached gRPC Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
 
-        if (sseSessions.isEmpty()) {
-            logger.log(Level.INFO, "No SSE sessions to analyze");
+        if (grpcSessions.isEmpty()) {
+            logger.log(Level.INFO, "No gRPC sessions to analyze");
             killK8ServersWithNoSessions(utilizationMapPercentMap, activePods, inactivePods);
             return;
         }
 
         var overallActiveSessions = cachedSessionUtilizationMap.values().stream()
-                .mapToInt(SseSessionUtilization::activeSessions)
+                .mapToInt(GrpcSessionUtilization::activeSessions)
                 .sum();
 
         var overallMaxSessions = activePods.size() * maxSessionsPerServer;
@@ -161,24 +161,24 @@ public class SseSessionApi {
             var targetServerCount = activePods.size() + inactivePods.size() - podsMarkedForDeletion;
             k8AutoScaler.patchDeploymentReplicas(sanitizeEnvVariable(kubernetesAppLabel), "default", targetServerCount);
         }
-        logger.info("SSE pods marked for deletion: " + podsMarkedForDeletion);
+        logger.info("gRPC pods marked for deletion: " + podsMarkedForDeletion);
     }
 
     public void analyzeSessionServerUtilizationForContainerRuntimeEnvs() {
-        var sseSessions = sseSessionService.findAllSessions();
-        var sessionUtilizationMap = sseSessionService.retrieveServerSessionUtilization(sseSessions);
-        var consulActiveServices = sseSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
-        var consulInactiveServices = sseSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var grpcSessions = grpcSessionService.findAllSessions();
+        var sessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
+        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
 
         logger.info("List of active consul services for app " + sanitizeEnvVariable(containerRuntimeAppName) + ": "
                 + objectMapper.valueToTree(consulActiveServices));
-        if (sseSessions.isEmpty()) {
-            logger.log(Level.INFO, "No SSE sessions to analyze");
+        if (grpcSessions.isEmpty()) {
+            logger.log(Level.INFO, "No gRPC sessions to analyze");
             return;
         }
 
         var overallActiveSessions = sessionUtilizationMap.values().stream()
-                .mapToInt(SseSessionUtilization::activeSessions)
+                .mapToInt(GrpcSessionUtilization::activeSessions)
                 .sum();
 
         var overallMaxSessions = consulActiveServices.size() * maxSessionsPerServer;
@@ -189,7 +189,8 @@ public class SseSessionApi {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
 
         if (overallMaxSessions == 0) {
-            logger.log(Level.INFO, "No max sessions configured, cannot analyze SSE balance Active consul services: " + consulActiveServices.size() + " MaxSessionsPerServer: " + maxSessionsPerServer);
+            logger.log(Level.INFO, "No max sessions configured, cannot analyze gRPC balance Active consul services: "
+                    + consulActiveServices.size() + " MaxSessionsPerServer: " + maxSessionsPerServer);
             return;
         }
 
@@ -223,12 +224,12 @@ public class SseSessionApi {
             }
         }
 
-        logger.info("SSE Summary: Overall Active Sessions: " + overallActiveSessions +
+        logger.info("gRPC Summary: Overall Active Sessions: " + overallActiveSessions +
                     ", Overall Max Sessions: " + overallMaxSessions +
                     ", Overall Utilization Percent: " + overallUtilizationPercent +
                     "%, Servers to scale out: " + numberOfServersToScaleOut +
                     ", Servers to scale in: " + numberOfServersToScaleIn);
-        logger.info("SSE Utilization Percent Map: " + utilizationMapPercentMap);
+        logger.info("gRPC Utilization Percent Map: " + utilizationMapPercentMap);
 
         if (numberOfServersToScaleIn == 0 && numberOfServersToScaleOut == 0) {
             killServersWithNoSessions(utilizationMapPercentMap, consulActiveServices);
@@ -236,7 +237,7 @@ public class SseSessionApi {
     }
 
     public void killServersWithNoSessions(Map<String, Integer> utilizationMapPercentMap, List<ConsulService> consulActiveServices) {
-        var consulInactiveServices = sseSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulInactiveServices = grpcSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
         consulInactiveServices.forEach(service -> {
             var isThereAnySessionConnectedToInactiveService = utilizationMapPercentMap.containsKey(service.Service.Address)
                     && utilizationMapPercentMap.get(service.Service.Address) > 0;
@@ -247,24 +248,23 @@ public class SseSessionApi {
     }
 
     public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices, List<ConsulService> consulActiveServices) {
-        // Placeholder for scaling out logic     
         consulInactiveServices.stream()
             .limit(numberOfServersToScaleOut)
             .forEach(service -> {
                 System.out.println("Activating inactive service " + service.Service.ID + " at " + service.Service.Address);
-                sseSessionService.toggleConsulService(service.Service.ID, "false", "Activating service due to scale out request");
-            });        
+                grpcSessionService.toggleConsulService(service.Service.ID, "false", "Activating service due to scale out request");
+            });
         var numberOfServersToScaleOutWithActivatedServices = consulActiveServices.size() + consulInactiveServices.size() >= targetServerCount ? 0 : targetServerCount - (consulActiveServices.size() + consulInactiveServices.size());
-        if(numberOfServersToScaleOutWithActivatedServices <= 0){
+        if (numberOfServersToScaleOutWithActivatedServices <= 0) {
             System.out.println("No need to scale out, inactive services can handle the target server count.");
             return;
-        } 
-        System.out.println("Scaling out SSE session servers...");
+        }
+        System.out.println("Scaling out gRPC session servers...");
         autoScaler.scaleOut(targetServerCount, sanitizeEnvVariable(containerRuntimeAppName));
     }
 
     public void scaleInSessionServers(int numberOfServers, Map<String, Integer> serverUtilization) {
-        logger.info("Scaling in SSE session servers...");
+        logger.info("Scaling in gRPC session servers...");
         autoScaler.scaleIn(numberOfServers, serverUtilization, sanitizeEnvVariable(containerRuntimeAppName));
     }
 
@@ -279,23 +279,23 @@ public class SseSessionApi {
     }
 
     public void analyzeSessionServerBalanceForContainerRuntime() {
-        var sseSessions = sseSessionService.findAllSessions();
-        var sessionUtilizationMap = sseSessionService.retrieveServerSessionUtilization(sseSessions);
-        var consulActiveServices = sseSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var grpcSessions = grpcSessionService.findAllSessions();
+        var sessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
+        var consulActiveServices = grpcSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
 
-        if (sseSessions.isEmpty()) {
-            logger.info("No SSE sessions to rebalance");
+        if (grpcSessions.isEmpty()) {
+            logger.info("No gRPC sessions to rebalance");
             return;
         }
 
         var overallActiveSessions = sessionUtilizationMap.values().stream()
-                .mapToInt(SseSessionUtilization::activeSessions)
+                .mapToInt(GrpcSessionUtilization::activeSessions)
                 .sum();
 
         var overallMaxSessions = consulActiveServices.size() * maxSessionsPerServer;
 
         if (overallMaxSessions == 0) {
-            logger.info("No max sessions configured, cannot analyze SSE balance");
+            logger.info("No max sessions configured, cannot analyze gRPC balance");
             return;
         }
 
@@ -327,11 +327,11 @@ public class SseSessionApi {
                 .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
                 .toList();
 
-        logger.info("SSE rebalancing summary: Overutilized Servers: " + overUtilizedServers
+        logger.info("gRPC rebalancing summary: Overutilized Servers: " + overUtilizedServers
                 + ", Underutilized Servers: " + underUtilizedServers
                 + ", Overall Utilization Percent: " + overallUtilizationPercent + "%, "
                 + "Overall Active Sessions: " + overallActiveSessions);
-        logger.info("SSE utilization percent map: " + utilizationMapPercentMap);
+        logger.info("gRPC utilization percent map: " + utilizationMapPercentMap);
 
         sortedOverUtilizedServers.forEach(s -> {
             double maxSessions = sessionUtilizationMap.get(s.getKey()).maxSessions();
@@ -343,24 +343,24 @@ public class SseSessionApi {
     }
 
     public void analyzeSessionServerBalanceForKubernetesEnvs() {
-        logger.info("SSE rebalancing started");
-        var sseSessions = sseSessionService.findAllSessions();
-        var sessionUtilizationMap = sseSessionService.retrieveServerSessionUtilization(sseSessions);
+        logger.info("gRPC rebalancing started");
+        var grpcSessions = grpcSessionService.findAllSessions();
+        var sessionUtilizationMap = grpcSessionService.retrieveServerSessionUtilization(grpcSessions);
         var activePods = k8AutoScaler.getPodsWithLabel("default", "traffic", "active");
 
-        if (sseSessions.isEmpty()) {
-            logger.info("No SSE sessions to rebalance");
+        if (grpcSessions.isEmpty()) {
+            logger.info("No gRPC sessions to rebalance");
             return;
         }
 
         var overallActiveSessions = sessionUtilizationMap.values().stream()
-                .mapToInt(SseSessionUtilization::activeSessions)
+                .mapToInt(GrpcSessionUtilization::activeSessions)
                 .sum();
 
         var overallMaxSessions = activePods.size() * maxSessionsPerServer;
 
         if (overallMaxSessions == 0) {
-            logger.info("No max sessions configured, cannot analyze SSE balance");
+            logger.info("No max sessions configured, cannot analyze gRPC balance");
             return;
         }
 
@@ -392,11 +392,11 @@ public class SseSessionApi {
                 .sorted((e1, e2) -> e2.getValue().compareTo(e1.getValue()))
                 .toList();
 
-        logger.info("SSE rebalancing summary: Overutilized Servers: " + overUtilizedServers
+        logger.info("gRPC rebalancing summary: Overutilized Servers: " + overUtilizedServers
                 + ", Underutilized Servers: " + underUtilizedServers
                 + ", Overall Utilization Percent: " + overallUtilizationPercent + "%, "
                 + "Overall Active Sessions: " + overallActiveSessions);
-        logger.info("SSE utilization percent map: " + utilizationMapPercentMap);
+        logger.info("gRPC utilization percent map: " + utilizationMapPercentMap);
 
         sortedOverUtilizedServers.forEach(s -> {
             double maxSessions = sessionUtilizationMap.get(s.getKey()).maxSessions();
@@ -408,12 +408,12 @@ public class SseSessionApi {
     }
 
     private void offLoadSessions(String fromServerId, int numberOfSessions) {
-        logger.info("Offloading " + numberOfSessions + " SSE sessions from server " + fromServerId);
-        sseSessionService.dropServerSessions(fromServerId, numberOfSessions);
+        logger.info("Offloading " + numberOfSessions + " gRPC sessions from server " + fromServerId);
+        grpcSessionService.dropServerSessions(fromServerId, numberOfSessions);
     }
 
     public void scaleInK8SessionServers(int numberOfServers, Map<String, Integer> serverUtilization, List<Pod> activePods) {
-        System.out.println("Scaling in SSE session servers...");
+        System.out.println("Scaling in gRPC session servers...");
         System.out.println("Number of servers to scale in: " + numberOfServers + " active pods: " + activePods.size()
                 + " server utilization map: " + serverUtilization);
 

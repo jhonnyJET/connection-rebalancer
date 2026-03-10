@@ -29,12 +29,12 @@ public class AutoScaler {
     // 1. SCALE OUT: "Dumb" expansion using Docker Compose
     // We use CLI because creating a container with correct networks/volumes 
     // via raw API is incredibly complex.
-    public void scaleOutWithDockerCompose(int targetCount) {
+    public void scaleOutWithDockerCompose(int targetCount, String appName) {
         try {
             System.out.println("🚀 Scaling OUT to " + targetCount + " instances...");
             
             ProcessBuilder pb = new ProcessBuilder(
-                "podman", "compose", "-f","/Users/jonathas.santos/Documents/projects/tracker_reverse_proxy/files/docker/compose-haproxy.yml", "up", "--scale", "ws-app=" + targetCount, "-d", "ws-app"
+                "podman", "compose", "-f","/Users/jonathas.santos/Documents/projects/tracker_reverse_proxy/files/docker/compose-haproxy.yml", "up", "--scale", appName + "=" + targetCount, "-d", appName
             );
             
             pb.inheritIO(); // Show logs in console
@@ -51,7 +51,7 @@ public class AutoScaler {
         }
     }
 
-    public void scaleOut(int targetCount) {
+    public void scaleOut(int targetCount, String appName) {
         try {
             System.out.println("🚀 Scaling OUT to " + targetCount + " instances...");
 
@@ -59,8 +59,8 @@ public class AutoScaler {
             String baseUrl = dockerSocketProxyUri;
             var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
 
-            // 1. Find an existing ws-app container to use as template
-            String filters = java.net.URLEncoder.encode("{\"name\":[\"ws-app\"]}", java.nio.charset.StandardCharsets.UTF_8);
+            // 1. Find an existing app container to use as template
+            String filters = java.net.URLEncoder.encode("{\"name\":[\"" + appName + "\"]}", java.nio.charset.StandardCharsets.UTF_8);
             HttpRequest listRequest = HttpRequest.newBuilder()
                                                  .uri(URI.create(baseUrl + "/containers/json?filters=" + filters))
                                                  .GET()
@@ -70,7 +70,7 @@ public class AutoScaler {
             var containers = objectMapper.readValue(listResponse.body(), com.fasterxml.jackson.databind.JsonNode[].class);
 
             if (containers.length == 0) {
-                System.err.println("❌ No existing ws-app container found as template");
+                System.err.println("❌ No existing " + appName + " container found as template");
                 return;
             }
 
@@ -143,7 +143,7 @@ public class AutoScaler {
 
                 // 4. Create the container
                 HttpRequest createRequest = HttpRequest.newBuilder()
-                                                       .uri(URI.create(baseUrl + "/containers/create?name=ws-app-" + System.currentTimeMillis()))
+                                                       .uri(URI.create(baseUrl + "/containers/create?name=" + appName + "-" + System.currentTimeMillis()))
                                                        .header("Content-Type", "application/json")
                                                        .POST(HttpRequest.BodyPublishers.ofString(createConfig.toString()))
                                                        .build();
@@ -292,10 +292,10 @@ public class AutoScaler {
         }
     }
 
-    public void scaleIn(int numberOfServers, Map<String, Integer> serverUtilization) {
+    public void scaleIn(int numberOfServers, Map<String, Integer> serverUtilization, String appName) {
         // Placeholder: In a real scenario, we would identify idle containers.
         // Here, we simulate stopping 'numberOfServers' idle containers.
-        var consulServices = consulClient.getServiceInstances("ws-app");
+        var consulServices = consulClient.getServiceInstances(appName);
         var activeOnlyConsulServices = consulServices.stream()
                 .filter(s -> s.Checks.stream().allMatch(c -> c.Status.equals("passing")))
                 .toList();

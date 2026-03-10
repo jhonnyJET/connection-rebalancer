@@ -44,6 +44,9 @@ public class WsSessionApi {
     @ConfigProperty(name = "connection.limit.per.host")
     Integer MAX_SESSIONS_PER_SERVER;
 
+    @ConfigProperty(name = "app.connection-rebalancer.container-runtime.app-name")
+    String containerRuntimeAppName;    
+
     @ConfigProperty(name = "overutilized.tolerance.percent")
     Integer OVERUTILIZED_TOLERANCE_PERCENT;
 
@@ -109,9 +112,8 @@ public class WsSessionApi {
 
         logger.info("Cached Session Map: " + objectMapper.valueToTree(cachedSessionUtilizationMap));
 
-        if (wsSessions.isEmpty() && activePods.size() <= 1) {
-            logger.log(Level.INFO, "No Sessions to analyze");
-            killK8ServersWithNoSessions(utilizationMapPercentMap, activePods, inactivePods);
+        if (wsSessions.isEmpty()) {
+            logger.log(Level.INFO, "No Websocket Sessions to analyze");
             return;
         }        
 
@@ -161,10 +163,10 @@ public class WsSessionApi {
     public void analyzeSessionServerUtilizationForContainerRuntimeEnvs() {
         var wsSessions = wsSessionService.findAllSessions();
         var sessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
-        var consulActiveServices = wsSessionService.getConsulActiveServices("ws-app");
-        var consulInactiveServices = wsSessionService.getConsulInactiveServices("ws-app");
-        if (wsSessions.isEmpty() && consulActiveServices.size() <= 1) {
-            logger.log(Level.INFO, "No Sessions to analyze");
+        var consulActiveServices = wsSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        var consulInactiveServices = wsSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
+        if (wsSessions.isEmpty()) {
+            logger.log(Level.INFO, "No Websocket Sessions to analyze");
             return;
         }        
 
@@ -196,7 +198,7 @@ public class WsSessionApi {
             var maxTargetServerTreshold = Math.ceil(overrallActiveSessions / ((float)MAX_SESSIONS_PER_SERVER * ((float)MAX_UTILIZATION_PERCENT / 100.0)));
             numberOfServersToScaleOut = (int)maxTargetServerTreshold - consulActiveServices.size();
             var targetServerCount = consulActiveServices.size() + (int)numberOfServersToScaleOut;            
-            scaleOutSessionServers(targetServerCount, numberOfServersToScaleOut, consulInactiveServices);
+            scaleOutSessionServers(targetServerCount, numberOfServersToScaleOut, consulInactiveServices, consulActiveServices);
         }
 
         if (overallUtilizationPercent < MIN_UTILIZATION_PERCENT) {
@@ -248,7 +250,7 @@ public class WsSessionApi {
 
 
     public void killServersWithNoSessions(Map<String, Integer> utilizationMapPercentMap, List<ConsulService> consulActiveServices) {
-        var consulInactiveServices = wsSessionService.getConsulInactiveServices("ws-app");
+        var consulInactiveServices = wsSessionService.getConsulInactiveServices(sanitizeEnvVariable(containerRuntimeAppName));
         
         consulInactiveServices.forEach(service -> {
             var isThereAnySessionConnectedToInactiveService = utilizationMapPercentMap.containsKey(service.Service.Address) && utilizationMapPercentMap.get(service.Service.Address) > 0;
@@ -344,7 +346,7 @@ public class WsSessionApi {
     public void analyzeSessionServerBalanceForContainerRuntime() {
         var wsSessions = wsSessionService.findAllSessions();
         var wsSessionUtilizationMap = wsSessionService.retrieveServerSessionUtilization(wsSessions);
-        var consulActiveServices = wsSessionService.getConsulActiveServices("ws-app");
+        var consulActiveServices = wsSessionService.getConsulActiveServices(sanitizeEnvVariable(containerRuntimeAppName));
         if (wsSessions.isEmpty()) {
             logger.info("No Sessions to rebalance");
             return;
@@ -440,7 +442,7 @@ public class WsSessionApi {
 
     public void scaleInSessionServers(int numberOfServers, Map<String, Integer> serverUtilization) {
         System.out.println("Scaling in WebSocket session servers...");
-        autoScaler.scaleIn(numberOfServers, serverUtilization);
+        autoScaler.scaleIn(numberOfServers, serverUtilization, sanitizeEnvVariable(containerRuntimeAppName));
         // Send command to docker or k8s orchestrator to cordon/remove server from load balancer
         // NOTE: Cordon server with the least number of active sessions
     }
@@ -469,24 +471,21 @@ public class WsSessionApi {
         k8AutoScaler.patchDeploymentReplicas(sanitizedK8AppLabel, "default", targetServerCount);
     }
 
-    public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices) {
-        // Placeholder for scaling out logic
-        var inactiveServicesCount = consulInactiveServices.size();
-        if (inactiveServicesCount >= numberOfServersToScaleOut) {
-            consulInactiveServices.stream()
-                .limit(numberOfServersToScaleOut)
-                .forEach(service -> {
-                    System.out.println("Activating inactive service " + service.Service.ID + " at " + service.Service.Address);
-                    wsSessionService.toggleConsulService(service.Service.ID, "false", "Activating service due to scale out request");
-                });
-        }
-        var serversToScaleOut = targetServerCount - inactiveServicesCount;        
-        if(serversToScaleOut <= 0){
+    public void scaleOutSessionServers(int targetServerCount, int numberOfServersToScaleOut, List<ConsulService> consulInactiveServices, List<ConsulService> consulActiveServices) {
+        // Placeholder for scaling out logic     
+        consulInactiveServices.stream()
+            .limit(numberOfServersToScaleOut)
+            .forEach(service -> {
+                System.out.println("Activating inactive service " + service.Service.ID + " at " + service.Service.Address);
+                wsSessionService.toggleConsulService(service.Service.ID, "false", "Activating service due to scale out request");
+            });        
+        var numberOfServersToScaleOutWithActivatedServices = consulActiveServices.size() + consulInactiveServices.size() >= targetServerCount ? 0 : targetServerCount - (consulActiveServices.size() + consulInactiveServices.size());
+        if(numberOfServersToScaleOutWithActivatedServices <= 0){
             System.out.println("No need to scale out, inactive services can handle the target server count.");
             return;
         } 
         System.out.println("Scaling out WebSocket session servers...");
-        autoScaler.scaleOut(serversToScaleOut);
+        autoScaler.scaleOut(targetServerCount, sanitizeEnvVariable(containerRuntimeAppName));
     }
 
     private String sanitizeEnvVariable(String envVariable) {
